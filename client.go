@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -56,18 +57,65 @@ func NewClient(config ClientConfig) (client *Client, err error) {
 	return
 }
 
+// Query is used to query data points
+type Query struct {
+	Aggregator string            `json:"aggregator"`
+	Metric     string            `json:"metric"`
+	Rate       bool              `json:"rate,omitempty"`
+	Downsample string            `json:"downsample,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
+}
+
+// Request is used to query data points
+type Request struct {
+	Start             interface{} `json:"start"`
+	End               interface{} `json:"end,omitempty"`
+	Queries           []*Query    `json:"queries"`
+	NoAnnotations     bool        `json:"noAnnotations,omitempty"`
+	GlobalAnnotations bool        `json:"globalAnnotations,omitempty"`
+	MsResolution      bool        `json:"msResolution,omitempty"`
+	ShowTSUIDs        bool        `json:"showTSUIDs,omitempty"`
+	Delete            bool        `json:"delete,omitempty"`
+}
+
+// GetResponse represents the response of a Get request
+type GetResponse struct {
+	Metric string                 `json:"metric"`
+	Tags   map[string]string      `json:"tags"`
+	DPS    map[string]interface{} `json:"dps"`
+}
+
+// PushResponse represents the response of a Put request
+type PushResponse struct {
+	// The number of data points that were queued successfully for storage
+	Success int `json:"success"`
+	// The number of data points that could not be queued for storage
+	Failed int `json:"failed"`
+}
+
+// Get get points of OpenSTDB
+func (c *Client) Get(r Request) ([]*GetResponse, error) {
+	var response []*GetResponse
+	return response, c.query("/api/query", r, &response)
+}
+
 // Push pushes a slice of points to OpenSTDB
 func (c *Client) Push(points []Point) error {
-	JSONPoints, err := json.Marshal(points)
+	var response PushResponse
+	return c.query("/api/put", points, &response)
+}
+
+func (c *Client) query(endpoint string, data, response interface{}) error {
+	query, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", c.endpoint.String()+"/api/put", bytes.NewBuffer(JSONPoints))
+	req, err := http.NewRequest("POST", c.endpoint.String()+endpoint, bytes.NewBuffer(query))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "")
+	req.Header.Set("Content-Type", "application/json")
 	if c.username != "" {
 		req.SetBasicAuth(c.username, c.password)
 	}
@@ -85,5 +133,30 @@ func (c *Client) Push(points []Point) error {
 		}
 		return fmt.Errorf(string(body))
 	}
-	return nil
+	return json.NewDecoder(resp.Body).Decode(&response)
+}
+
+// GetPoints will order and convert the response in an ordered array of points
+func (r *GetResponse) GetPoints() []*Point {
+	points := make([]*Point, len(r.DPS))
+	timestamps := make([]string, len(r.DPS))
+	i := 0
+	for k := range r.DPS {
+		timestamps[i] = k
+		i++
+	}
+
+	for j, timestamp := range timestamps {
+		ts, err := strconv.Atoi(timestamp)
+		if err != nil {
+			continue
+		}
+		points[j] = &Point{
+			Metric:    r.Metric,
+			Timestamp: int64(ts),
+			Tags:      r.Tags,
+			Value:     r.DPS[timestamp],
+		}
+	}
+	return points
 }

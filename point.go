@@ -12,7 +12,7 @@ type Point struct {
 	Timestamp int64 `json:"timestamp"`
 
 	// A numeric value to store at the given timestamp for the time series.
-	Value float64 `json:"value"`
+	Value interface{} `json:"value"`
 
 	// A key/value pair consisting of a tagk (the key) and a tagv (the value).
 	// Each data point must have at least one tag.
